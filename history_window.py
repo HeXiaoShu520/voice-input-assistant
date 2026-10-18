@@ -4,7 +4,7 @@
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QApplication, QLabel, QListWidget, QListWidgetItem,
+    QApplication, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QVBoxLayout, QWidget,
 )
 
