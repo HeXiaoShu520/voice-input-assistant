@@ -18,11 +18,10 @@ class HistoryWindow(QWidget):
         """构建列表界面：顶部标题栏、中间列表、底部清空按钮。"""
         super().__init__(parent)
         self.setWindowTitle('识别历史')
-        self.setMinimumSize(480, 500)
-        self.resize(520, 600)
+        self.setMinimumSize(460, 420)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(8)
 
         # 顶部：标题 + 刷新按钮
@@ -49,9 +48,13 @@ class HistoryWindow(QWidget):
         self._list = QListWidget()
         self._list.setAlternatingRowColors(True)
         self._list.setStyleSheet('''
-            QListWidget { border: 1px solid #ddd; border-radius: 4px; }
-            QListWidget::item { padding: 6px 8px; }
-            QListWidget::item:selected { background: #ede9ff; color: #333; }
+            QListWidget {
+                border: 1px solid #e6e0f5; border-radius: 8px;
+                background: #ffffff; color: #2b2350; font-size: 13px;
+            }
+            QListWidget::item { padding: 6px 8px; border-radius: 6px; }
+            QListWidget::item:selected { background: #ece7ff; color: #2b2350; }
+            QListWidget::item:hover { background: #f7f4ff; }
         ''')
         self._list.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self._list)

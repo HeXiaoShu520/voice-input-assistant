@@ -145,6 +145,15 @@ QPushButton#primary:disabled { background: #c9c2f0; color: #f0edff; }
 QPushButton#danger { color: #d63031; }
 QPushButton#danger:hover { border-color: #f0a4a4; background: #fff3f3; }
 
+QPushButton#seg { padding: 5px 18px; color: #6f6890; }
+QPushButton#seg:checked {
+    background: #6c5ce7;
+    color: #ffffff;
+    border-color: #6c5ce7;
+    font-weight: 600;
+}
+QPushButton#seg:hover:!checked { background: #f7f4ff; }
+
 QCheckBox { spacing: 8px; color: #2b2350; }
 QCheckBox::indicator {
     width: 36px;

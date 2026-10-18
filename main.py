@@ -15,9 +15,9 @@ import sys
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFormLayout, QFrame,
+    QApplication, QButtonGroup, QComboBox, QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
-    QSystemTrayIcon, QVBoxLayout, QWidget,
+    QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 import autostart
@@ -139,9 +139,8 @@ class MainWindow(QWidget):
     enabled_toggled = Signal(bool)
     autostart_toggled = Signal(bool)
     quit_requested = Signal()
-    history_requested = Signal()
 
-    def __init__(self, controller, icon):
+    def __init__(self, controller, icon, history_window):
         super().__init__()
         self._controller = controller
         self._test_done.connect(self._on_test_done)  # 必须连接：否则测试结果永远到不了界面
@@ -155,7 +154,7 @@ class MainWindow(QWidget):
         root.setContentsMargins(24, 20, 24, 18)
         root.setSpacing(12)
 
-        # ── 标题区 ────────────────────────────────────────────────
+        # ── 标题区 + 页面切换 ─────────────────────────────────────
         header = QHBoxLayout()
         icon_label = QLabel()
         if icon is not None and not icon.isNull():
@@ -171,6 +170,20 @@ class MainWindow(QWidget):
         title_col.addWidget(app_subtitle)
         header.addLayout(title_col)
         header.addStretch(1)
+
+        # 分段开关：设置 / 识别历史 两个可切换页面
+        self._seg_group = QButtonGroup(self)
+        self._seg_group.setExclusive(True)
+        seg_box = QHBoxLayout()
+        seg_box.setSpacing(6)
+        for page_id, label in ((0, '设置'), (1, '识别历史')):
+            btn = QPushButton(label)
+            btn.setObjectName('seg')
+            btn.setCheckable(True)
+            btn.setChecked(page_id == 0)
+            self._seg_group.addButton(btn, page_id)
+            seg_box.addWidget(btn)
+        header.addLayout(seg_box)
         root.addLayout(header)
 
         # ── 状态胶囊 ──────────────────────────────────────────────
@@ -178,6 +191,16 @@ class MainWindow(QWidget):
         self._status_label.setObjectName('statusPill')
         self._status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         root.addWidget(self._status_label)
+
+        # ── 页面栈：0=设置页 1=识别历史页 ─────────────────────────
+        self._stack = QStackedWidget()
+        self._seg_group.idClicked.connect(self._stack.setCurrentIndex)
+
+        settings_page = QWidget()
+        settings_page.setObjectName('pageSettings')
+        page = QVBoxLayout(settings_page)
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(12)
 
         # ── 基础设置卡片 ──────────────────────────────────────────
         basic_card = QFrame()
@@ -214,7 +237,7 @@ class MainWindow(QWidget):
         _combo_set_by_data(self._inject_combo, config.get('inject_mode') or 'paste')
         form.addRow('注入方式：', self._inject_combo)
         basic.addLayout(form)
-        root.addWidget(basic_card)
+        page.addWidget(basic_card)
 
         # ── API Key 卡片 ──────────────────────────────────────────
         key_card = QFrame()
@@ -255,13 +278,10 @@ class MainWindow(QWidget):
         self._test_result = QLabel('')
         self._test_result.setWordWrap(True)
         key_layout.addWidget(self._test_result)
-        root.addWidget(key_card)
+        page.addWidget(key_card)
 
         # ── 底部按钮 ──────────────────────────────────────────────
         btns = QHBoxLayout()
-        history_btn = QPushButton('识别历史…')
-        history_btn.clicked.connect(self.history_requested.emit)
-        btns.addWidget(history_btn)
         btns.addStretch(1)
         quit_btn = QPushButton('退出程序')
         quit_btn.setObjectName('danger')
@@ -273,9 +293,16 @@ class MainWindow(QWidget):
         save_btn.setFixedWidth(110)
         save_btn.clicked.connect(self._save)
         btns.addWidget(save_btn)
-        root.addLayout(btns)
+        page.addLayout(btns)
+
+        self._stack.addWidget(settings_page)
+        self._stack.addWidget(history_window)  # 识别历史作为第二个页面
+        root.addWidget(self._stack)
 
         self._update_status()
+
+    def _stack_set_page(self, page_id):
+        self._stack.setCurrentIndex(page_id)
 
     # ── 状态与联动 ────────────────────────────────────────────────
     # 状态胶囊的配色：前景/底色/圆点（随状态切换）
@@ -314,7 +341,18 @@ class MainWindow(QWidget):
         self._autostart_check.setChecked(bool(checked))
         self._autostart_check.blockSignals(False)
 
-    def show_and_raise(self):
+    def _switch_page(self, page_id):
+        """切换页面并同步分段按钮状态（用户点击与程序跳转共用）。"""
+        self._stack.setCurrentIndex(page_id)
+        for b in self._seg_group.buttons():
+            b.blockSignals(True)
+            b.setChecked(self._seg_group.id(b) == page_id)
+            b.blockSignals(False)
+
+    def show_and_raise(self, page=None):
+        """显示主界面；page=0 设置页 / 1 识别历史页，None 保持当前页。"""
+        if page is not None:
+            self._switch_page(page)
         self.show()
         self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
         self.raise_()
@@ -459,22 +497,39 @@ def main():
     app.setWindowIcon(icon)
     controller = VoiceInputController()
 
+    history_window = HistoryWindow()
+    history_window.setWindowIcon(icon)
+
     # ── 主界面 ────────────────────────────────────────────────
-    win = MainWindow(controller, icon)
+    win = MainWindow(controller, icon, history_window)
 
     # 界面自检：自动触发一次「测试连接」，验证结果信号能否回到 UI
     if '--uitest' in sys.argv[1:]:
+        def run_history_check():
+            for btn in win.findChildren(QPushButton):
+                if btn.text() == '识别历史':
+                    log.info('UITEST 切换到识别历史页')
+                    btn.click()
+                    break
+
+            def check():
+                log.info('UITEST 历史页可见=%s 当前页=%s',
+                         history_window.isVisible(), win._stack.currentIndex())
+                QTimer.singleShot(300, lambda: app.exit(0))
+
+            QTimer.singleShot(1000, check)
+
         def run_uitest():
             def on_result(ok, text):
                 log.info('UITEST 收到结果 ok=%s text=%r', ok, text)
                 log.info('UITEST 标签=%r 按钮可用=%s',
                          win._test_result.text(), win._test_btn.isEnabled())
-                QTimer.singleShot(500, app.quit)
+                QTimer.singleShot(800, run_history_check)
             win._test_done.connect(on_result)
             log.info('UITEST 触发测试连接')
             win._test_connection()
         QTimer.singleShot(3000, run_uitest)
-        QTimer.singleShot(30000, app.quit)  # 保底退出
+        QTimer.singleShot(30000, lambda: app.exit(0))  # 保底退出
 
     # ── 托盘 ──────────────────────────────────────────────────
     tray = QSystemTrayIcon(icon)
@@ -525,23 +580,16 @@ def main():
     menu.addSeparator()
 
     main_window_action = QAction('打开主界面…', menu)
-    main_window_action.triggered.connect(win.show_and_raise)
+    main_window_action.triggered.connect(lambda: win.show_and_raise())
     menu.addAction(main_window_action)
 
     menu.addSeparator()
 
-    history_window = HistoryWindow()
-    history_window.setWindowIcon(icon)
-
-    history_action = QAction('识别历史…', menu)
-    history_action.triggered.connect(history_window.show_and_raise)
-    menu.addAction(history_action)
-
-    # 双击托盘图标打开识别历史
+    # 双击托盘图标：直接打开主界面的识别历史页
     def on_tray_activated(reason):
         # Windows 上 reason 是 int，DoubleClick=2，Trigger(单击)=3
         if int(reason) in (2, 3):
-            history_window.show_and_raise()
+            win.show_and_raise(1)
 
     tray.activated.connect(on_tray_activated)
 
