@@ -15,7 +15,7 @@ import sys
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFormLayout, QFrame,
+    QApplication, QComboBox, QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
     QSystemTrayIcon, QVBoxLayout, QWidget,
 )
@@ -25,7 +25,7 @@ import config
 from hotkey_trigger import hotkey_display
 from log_util import get_logger, setup_logging
 from toast import show_toast
-from ui_theme import APP_QSS
+from ui_theme import APP_QSS, ToggleSwitch
 from voice_input_controller import VoiceInputController
 from history_window import HistoryWindow
 
@@ -192,12 +192,12 @@ class MainWindow(QWidget):
         form = QFormLayout()
         form.setSpacing(10)
 
-        self._enabled_check = QCheckBox('启用语音输入（关闭后热键无效）')
+        self._enabled_check = ToggleSwitch('启用语音输入（关闭后热键无效）')
         self._enabled_check.setChecked(bool(config.get('enabled')))
         self._enabled_check.toggled.connect(self.enabled_toggled.emit)
         form.addRow(self._enabled_check)
 
-        self._autostart_check = QCheckBox('开机自动启动（静默启动到托盘）')
+        self._autostart_check = ToggleSwitch('开机自动启动（静默启动到托盘）')
         self._autostart_check.setChecked(autostart.is_enabled())
         self._autostart_check.toggled.connect(self.autostart_toggled.emit)
         form.addRow(self._autostart_check)

@@ -1,5 +1,68 @@
 # coding:utf-8
-"""应用界面主题：全局 QSS 样式表（极光紫，与录音胶囊/通知气泡同一配色）。"""
+"""应用界面主题：全局 QSS 样式表与自绘控件（极光紫，与录音胶囊同一配色）。"""
+
+from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import QAbstractButton
+
+
+class ToggleSwitch(QAbstractButton):
+    """iOS 风格滑动开关：圆角滑轨 + 滑动圆钮，点击整行切换，带滑动动画。"""
+
+    _TRACK_W, _TRACK_H, _KNOB_D, _PAD = 44.0, 22.0, 18.0, 2.0
+
+    def __init__(self, text='', parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setText(text)
+        self._knob = 0.0  # 0=关 1=开
+        self._anim = QPropertyAnimation(self, b'knob', self)
+        self._anim.setDuration(130)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.toggled.connect(self._slide)
+
+    def _slide(self, checked):
+        self._anim.stop()
+        self._anim.setStartValue(self._knob)
+        self._anim.setEndValue(1.0 if checked else 0.0)
+        self._anim.start()
+
+    def get_knob(self):
+        return self._knob
+
+    def set_knob(self, value):
+        self._knob = float(value)
+        self.update()
+
+    knob = Property(float, get_knob, set_knob)
+
+    def sizeHint(self):
+        fm = self.fontMetrics()
+        return QSize(int(self._TRACK_W + 10 + fm.horizontalAdvance(self.text()) + 4),
+                     max(26, fm.height() + 10))
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        h, tw, th, kd, pad = self.height(), self._TRACK_W, self._TRACK_H, self._KNOB_D, self._PAD
+        if not self.isEnabled():
+            track, knob, text = QColor('#e8e5f2'), QColor('#c9c4dd'), QColor('#b0abc4')
+        elif self.isChecked():
+            track, knob, text = QColor('#6c5ce7'), QColor('#ffffff'), QColor('#2b2350')
+        else:
+            track, knob, text = QColor('#d5d0e6'), QColor('#ffffff'), QColor('#2b2350')
+        p.setPen(Qt.NoPen)
+        p.setBrush(track)
+        p.drawRoundedRect(QRectF(0, (h - th) / 2, tw, th), th / 2, th / 2)
+        x = pad + self._knob * (tw - kd - 2 * pad)
+        p.setBrush(knob)
+        p.drawEllipse(QRectF(x, (h - th) / 2 + pad, kd, kd))
+        if self.text():
+            p.setPen(text)
+            p.drawText(QRectF(tw + 10, 0, self.width() - tw - 10, h),
+                       Qt.AlignVCenter | Qt.AlignLeft, self.text())
+
 
 APP_QSS = """
 #MainWindow {
