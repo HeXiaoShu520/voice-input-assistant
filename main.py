@@ -635,11 +635,11 @@ def main():
 
     menu.addSeparator()
 
-    # 双击托盘图标：直接打开主界面的识别历史页
+    # 单击/双击托盘图标：打开主界面（设置页）；历史页在主界面里切换
     def on_tray_activated(reason):
         # Windows 上 reason 是 int，DoubleClick=2，Trigger(单击)=3
         if int(reason) in (2, 3):
-            win.show_and_raise(1)
+            win.show_and_raise(0)
 
     tray.activated.connect(on_tray_activated)
 
