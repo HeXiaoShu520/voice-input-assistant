@@ -1,0 +1,4 @@
+pynput
+websockets
+sounddevice
+PySide6>=6.6.0

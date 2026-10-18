@@ -1,0 +1,14 @@
+# 私有数据：含 API Key、语音识别历史与日志，严禁入库
+data/
+
+# 构建产物
+build/
+dist/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 临时验证脚本
+_verify*.py
+_test*.py
