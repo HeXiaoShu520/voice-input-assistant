@@ -61,12 +61,12 @@ class _ToastWindow(QWidget):
         self._hide_timer.start(duration_ms)
 
     def _reposition(self):
-        """固定在主屏幕右下角（任务栏上方），与托盘提示的习惯位置一致。"""
+        """固定在主屏幕底部居中（任务栏上方），视线更容易注意到。"""
         screen = QApplication.primaryScreen()
         if screen is None:
             return
         geo = screen.availableGeometry()
-        self.move(geo.right() - self.width() - _EDGE_MARGIN,
+        self.move(geo.center().x() - self.width() // 2,
                   geo.bottom() - self.height() - _BOTTOM_GAP)
 
     def paintEvent(self, event):
