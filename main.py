@@ -1,10 +1,11 @@
 # coding:utf-8
 """实时语音输入小助手入口。
 
-纯托盘程序：
+托盘常驻 + 主界面程序：
+- 双击 exe 打开主界面（开关、触发按键、注入方式、API Key、连接测试）；
+  关闭主界面只是最小化到托盘，语音输入继续可用
 - 按全局热键（默认鼠标中键）开始/停止录音，识别文字自动注入当前输入框
-- 托盘菜单：启用开关、开机自启动、设置、退出
-- 设置窗口：API Key 输入框、热键选择、跳转火山控制台链接
+- 托盘菜单：启用开关、开机自启动、打开主界面、识别历史、退出
 """
 
 import ctypes
@@ -14,7 +15,7 @@ import sys
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
+    QApplication, QCheckBox, QComboBox, QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
     QSystemTrayIcon, QVBoxLayout, QWidget,
 )
@@ -32,6 +33,9 @@ log = get_logger('voice.app')
 APP_NAME = '实时语音输入小助手'
 VOLC_API_KEY_URL = 'https://console.volcengine.com/iam/keymanage/'
 
+# 开机自启动以静默方式拉起（只进托盘，不弹主界面）
+_TRAY_ARG = '--tray'
+
 # 单实例互斥体名；Local\ 前缀 = 当前登录会话内唯一
 _SINGLE_INSTANCE_MUTEX = 'Local\\VoiceInputAssistant'
 _ERROR_ALREADY_EXISTS = 183
@@ -47,6 +51,7 @@ def _acquire_single_instance():
     _k32.CreateMutexW(None, False, _SINGLE_INSTANCE_MUTEX)
     return ctypes.get_last_error() != _ERROR_ALREADY_EXISTS
 
+
 # 可选热键列表：(显示名称, config 值)
 _HOTKEY_OPTIONS = [
     ('鼠标中键（推荐）', 'mouse:middle'),
@@ -56,6 +61,12 @@ _HOTKEY_OPTIONS = [
     ('F8', 'key:f8'),
     ('F9', 'key:f9'),
     ('F10', 'key:f10'),
+]
+
+# 文字注入方式：(显示名称, config 值)
+_INJECT_OPTIONS = [
+    ('复制粘贴（推荐，零丢失）', 'paste'),
+    ('模拟打字', 'typing'),
 ]
 
 
@@ -79,42 +90,89 @@ def _make_icon():
     return QIcon(pixmap)
 
 
-class SettingsDialog(QDialog):
-    """设置弹窗：API Key 输入、热键选择、跳转火山控制台、测试连接。"""
+def _combo_set_by_data(combo, data):
+    """按下拉项的 data 选中对应项；找不到时选第 0 项。"""
+    idx = combo.findData(data)
+    combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+
+class MainWindow(QWidget):
+    """主界面：语音输入开关、触发按键、注入方式与 API Key 设置。
+
+    双击 exe 或托盘菜单均可打开；关闭窗口只是最小化到托盘。
+    开关类选项改动立即生效；表单字段点「保存设置」后生效。
+    """
 
     # 测试线程 → UI 线程的结果回传：(是否成功, 结果文字)。
     # QTimer.singleShot 在普通 Python 线程里不会触发（没有 Qt 事件循环），
     # 跨线程更新 UI 必须走 Signal 的队列连接。
     _test_done = Signal(bool, str)
+    # 开关改动交给 main() 统一处理：写配置、重启监听器、同步托盘菜单
+    enabled_toggled = Signal(bool)
+    autostart_toggled = Signal(bool)
+    quit_requested = Signal()
+    history_requested = Signal()
 
-    def __init__(self, parent=None):
-        """搭建表单：说明文字、链接按钮、API Key 输入框、热键下拉、测试/保存/取消。"""
-        super().__init__(parent)
-        self._test_done.connect(self._on_test_done)
-        self.setWindowTitle(APP_NAME + ' — 设置')
-        self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
-        self.setMinimumWidth(440)
+    def __init__(self, controller, icon):
+        super().__init__()
+        self._controller = controller
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(icon)
+        self.setMinimumWidth(480)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        root = QVBoxLayout(self)
+        root.setSpacing(10)
 
-        hint = QLabel('语音识别使用火山引擎 ASR，需要填写 API Key。')
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        # 顶部状态：一句话说明当前怎么用
+        self._status_label = QLabel('')
+        self._status_label.setWordWrap(True)
+        self._status_label.setStyleSheet('color: #5b6ef5; font-weight: bold;')
+        root.addWidget(self._status_label)
+
+        # ── 基础设置 ──────────────────────────────────────────────
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self._enabled_check = QCheckBox('启用语音输入（关闭后热键无效）')
+        self._enabled_check.setChecked(bool(config.get('enabled')))
+        self._enabled_check.toggled.connect(self.enabled_toggled.emit)
+        form.addRow(self._enabled_check)
+
+        self._autostart_check = QCheckBox('开机自动启动（静默启动到托盘）')
+        self._autostart_check.setChecked(autostart.is_enabled())
+        self._autostart_check.toggled.connect(self.autostart_toggled.emit)
+        form.addRow(self._autostart_check)
+
+        self._hotkey_combo = QComboBox()
+        for label, value in _HOTKEY_OPTIONS:
+            self._hotkey_combo.addItem(label, value)
+        _combo_set_by_data(self._hotkey_combo, config.get('hotkey'))
+        form.addRow('触发按键：', self._hotkey_combo)
+
+        self._inject_combo = QComboBox()
+        for label, value in _INJECT_OPTIONS:
+            self._inject_combo.addItem(label, value)
+        _combo_set_by_data(self._inject_combo, config.get('inject_mode') or 'paste')
+        form.addRow('注入方式：', self._inject_combo)
+        root.addLayout(form)
+
+        # ── API Key ───────────────────────────────────────────────
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        root.addWidget(line)
+
+        key_hint = QLabel('语音识别使用火山引擎流式 ASR，需要填写 API Key。')
+        key_hint.setWordWrap(True)
+        root.addWidget(key_hint)
 
         link_btn = QPushButton('去火山控制台获取 API Key ↗')
         link_btn.setStyleSheet('QPushButton { color: #5b6ef5; border: none; text-align: left; padding: 0; }')
         link_btn.setCursor(Qt.PointingHandCursor)
         link_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(VOLC_API_KEY_URL)))
-        layout.addWidget(link_btn)
+        root.addWidget(link_btn)
 
-        form = QFormLayout()
-        form.setSpacing(8)
-
-        # API Key 行：输入框 + 测试按钮并排
-        key_widget = QWidget()
-        key_row = QHBoxLayout(key_widget)
-        key_row.setContentsMargins(0, 0, 0, 0)
+        key_row = QHBoxLayout()
         self._key_edit = QLineEdit()
         self._key_edit.setPlaceholderText('粘贴 API Key')
         self._key_edit.setEchoMode(QLineEdit.Password)
@@ -124,33 +182,70 @@ class SettingsDialog(QDialog):
         self._test_btn.setFixedWidth(80)
         self._test_btn.clicked.connect(self._test_connection)
         key_row.addWidget(self._test_btn)
-        form.addRow('API Key：', key_widget)
 
-        # 测试结果标签
+        key_form = QFormLayout()
+        key_form.setSpacing(8)
+        key_form.addRow('API Key：', key_row)
         self._test_result = QLabel('')
         self._test_result.setWordWrap(True)
-        form.addRow('', self._test_result)
+        key_form.addRow('', self._test_result)
+        root.addLayout(key_form)
 
-        self._hotkey_combo = QComboBox()
-        self._hotkey_combo.addItem('未配置', '')
-        current_hotkey = config.get('hotkey') or ''
-        selected_idx = 0
-        for i, (label, value) in enumerate(_HOTKEY_OPTIONS):
-            self._hotkey_combo.addItem(label, value)
-            if value == current_hotkey:
-                selected_idx = i + 1
-        self._hotkey_combo.setCurrentIndex(selected_idx)
-        form.addRow('触发按键：', self._hotkey_combo)
+        # ── 底部按钮 ──────────────────────────────────────────────
+        btns = QHBoxLayout()
+        history_btn = QPushButton('识别历史…')
+        history_btn.clicked.connect(self.history_requested.emit)
+        btns.addWidget(history_btn)
+        btns.addStretch(1)
+        save_btn = QPushButton('保存设置')
+        save_btn.setDefault(True)
+        save_btn.clicked.connect(self._save)
+        btns.addWidget(save_btn)
+        quit_btn = QPushButton('退出程序')
+        quit_btn.clicked.connect(self.quit_requested.emit)
+        btns.addWidget(quit_btn)
+        root.addLayout(btns)
 
-        layout.addLayout(form)
+        self._update_status()
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText('保存')
-        buttons.button(QDialogButtonBox.Cancel).setText('取消')
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+    # ── 状态与联动 ────────────────────────────────────────────────
+    def _update_status(self):
+        """顶部一句话：结合开关/密钥/热键告诉用户现在怎么用。"""
+        if not config.get('enabled'):
+            txt = '语音输入当前已停用，勾选上方开关即可恢复'
+        elif not config.api_key():
+            txt = '还差一步：在下方填写 API Key 并点「保存设置」'
+        else:
+            txt = ('随时按%s开始录音，边说边出字；再按一次停止，'
+                   '文字自动打进当前输入框' % hotkey_display(config.get('hotkey') or _HOTKEY_OPTIONS[0][1]))
+        self._status_label.setText(txt)
 
+    def sync_enabled_check(self, checked):
+        """托盘菜单等外部改动后回写勾选框（不触发 toggled 信号）。"""
+        self._enabled_check.blockSignals(True)
+        self._enabled_check.setChecked(bool(checked))
+        self._enabled_check.blockSignals(False)
+        self._update_status()
+
+    def sync_autostart_check(self, checked):
+        """注册表写入结果（含失败回退）后回写勾选框。"""
+        self._autostart_check.blockSignals(True)
+        self._autostart_check.setChecked(bool(checked))
+        self._autostart_check.blockSignals(False)
+
+    def show_and_raise(self):
+        self.show()
+        self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+        self.raise_()
+        self.activateWindow()
+
+    def closeEvent(self, event):
+        """点 X 只是最小化到托盘，语音输入继续在后台可用。"""
+        event.ignore()
+        self.hide()
+        show_toast('已最小化到托盘，语音输入继续可用', duration_ms=1500)
+
+    # ── API Key 连接测试 ──────────────────────────────────────────
     def _test_connection(self):
         """用当前填写的 API Key 测试 WebSocket 握手，显示结果。"""
         import threading
@@ -203,12 +298,10 @@ class SettingsDialog(QDialog):
         threading.Thread(target=do_test, daemon=True).start()
 
     def _on_test_done(self, ok, text):
-        """主线程接收测试结果：更新提示文字并恢复按钮。"""
         self._show_result(text, ok)
         self._test_btn.setEnabled(True)
 
     def _show_result(self, text, ok):
-        """更新测试结果标签样式。"""
         if ok is None:
             color = '#888'
         elif ok:
@@ -218,12 +311,19 @@ class SettingsDialog(QDialog):
         self._test_result.setStyleSheet(f'color: {color}; font-size: 12px;')
         self._test_result.setText(text)
 
+    # ── 保存（表单字段） ──────────────────────────────────────────
     def _save(self):
-        """保存 API Key 与热键配置并关闭窗口。"""
-        key = self._key_edit.text().strip()
-        hotkey = self._hotkey_combo.currentData()
-        config.set_many({'api_key': key, 'hotkey': hotkey})
-        self.accept()
+        """保存 API Key、触发按键与注入方式；热键变更会重启监听器。"""
+        old_hotkey = config.get('hotkey')
+        config.set_many({
+            'api_key': self._key_edit.text().strip(),
+            'hotkey': self._hotkey_combo.currentData(),
+            'inject_mode': self._inject_combo.currentData(),
+        })
+        if config.get('hotkey') != old_hotkey:
+            self._controller.apply_settings()
+        self._update_status()
+        show_toast('设置已保存')
 
 
 def _confirm_exit():
@@ -239,17 +339,19 @@ def _confirm_exit():
 
 
 def main():
-    """应用主入口：初始化 Qt、托盘与控制器，进入事件循环。"""
+    """应用主入口：初始化 Qt、托盘、主界面与控制器，进入事件循环。"""
     setup_logging()
     log.info('启动 %s', APP_NAME)
     config.load()
     # exe 被挪动后注册表自启动路径会过期，启动时顺手修正
     autostart_healed = autostart.heal()
+    # 开机自启动（--tray）静默拉起：只进托盘，不弹主界面
+    start_minimized = _TRAY_ARG in sys.argv[1:]
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
-    # ── 单实例锁 ──────────────────────────────────────────────────────
+    # ── 单实例锁 ──────────────────────────────────────────────
     if not _acquire_single_instance():
         log.warning('已有实例在运行，本次启动退出')
         show_toast('小助手已在运行，无需重复启动', duration_ms=1800)
@@ -260,7 +362,10 @@ def main():
     app.setWindowIcon(icon)
     controller = VoiceInputController()
 
-    # ── 托盘 ──────────────────────────────────────────────────────────
+    # ── 主界面 ────────────────────────────────────────────────
+    win = MainWindow(controller, icon)
+
+    # ── 托盘 ──────────────────────────────────────────────────
     tray = QSystemTrayIcon(icon)
     tray.setToolTip(APP_NAME)
 
@@ -269,47 +374,48 @@ def main():
 
     menu = QMenu()
 
+    # 启用开关：托盘与主界面两处入口，逻辑集中在这一个处理函数
     toggle_action = QAction('启用语音输入', menu, checkable=True)
     toggle_action.setChecked(bool(config.get('enabled')))
 
-    def on_toggled(checked):
+    def on_enabled_changed(checked):
         config.set_many({'enabled': bool(checked)})
         controller.apply_settings()
         show_toast('语音输入已' + ('启用' if checked else '停用'))
+        toggle_action.blockSignals(True)
+        toggle_action.setChecked(bool(checked))
+        toggle_action.blockSignals(False)
+        win.sync_enabled_check(checked)
 
-    toggle_action.toggled.connect(on_toggled)
+    toggle_action.toggled.connect(on_enabled_changed)
+    win.enabled_toggled.connect(on_enabled_changed)
     menu.addAction(toggle_action)
 
+    # 开机自启动：同样是托盘/主界面两处入口
     autostart_action = QAction('开机自动启动', menu, checkable=True)
     autostart_action.setChecked(autostart.is_enabled())
 
-    def on_autostart_toggled(checked):
+    def on_autostart_changed(checked):
         try:
             autostart.set_enabled(checked)
             show_toast('开机自启动已' + ('开启' if checked else '关闭'))
         except Exception as e:
-            autostart_action.setChecked(not checked)
             show_toast('设置失败：%s' % str(e)[:60], warning=True)
+            checked = not checked
+        autostart_action.blockSignals(True)
+        autostart_action.setChecked(bool(checked))
+        autostart_action.blockSignals(False)
+        win.sync_autostart_check(checked)
 
-    autostart_action.toggled.connect(on_autostart_toggled)
+    autostart_action.toggled.connect(on_autostart_changed)
+    win.autostart_toggled.connect(on_autostart_changed)
     menu.addAction(autostart_action)
 
     menu.addSeparator()
 
-    settings_action = QAction('设置…', menu)
-
-    def on_settings():
-        old_hotkey = config.get('hotkey')
-        dlg = SettingsDialog()
-        dlg.setWindowIcon(icon)
-        if dlg.exec() == QDialog.Accepted:
-            # 热键变了需要重启监听器
-            if config.get('hotkey') != old_hotkey:
-                controller.apply_settings()
-            show_toast('设置已保存')
-
-    settings_action.triggered.connect(on_settings)
-    menu.addAction(settings_action)
+    main_window_action = QAction('打开主界面…', menu)
+    main_window_action.triggered.connect(win.show_and_raise)
+    menu.addAction(main_window_action)
 
     menu.addSeparator()
 
@@ -320,7 +426,7 @@ def main():
     history_action.triggered.connect(history_window.show_and_raise)
     menu.addAction(history_action)
 
-    # 双击托盘图标也打开历史窗口
+    # 双击托盘图标打开识别历史
     def on_tray_activated(reason):
         # Windows 上 reason 是 int，DoubleClick=2，Trigger(单击)=3
         if int(reason) in (2, 3):
@@ -333,26 +439,29 @@ def main():
     quit_action = QAction('退出', menu)
 
     def on_quit():
-        """托盘退出：确认后停掉控制器，托盘图标先消失，短暂提示再退出。"""
+        """托盘/主界面退出：确认后停掉控制器，托盘图标先消失，短暂提示再退出。"""
         if not _confirm_exit():
             return
         log.info('托盘退出')
         controller.shutdown()
         tray.hide()
+        win.hide()
         show_toast('已退出', duration_ms=1200)
         QTimer.singleShot(1300, app.quit)
 
     quit_action.triggered.connect(on_quit)
+    win.quit_requested.connect(on_quit)
     menu.addAction(quit_action)
 
     tray.setContextMenu(menu)
     tray.show()
 
-    # 没配置时直接打开设置窗口；配置齐全则用自绘气泡提示一次用法，
-    # 避免静默启动让人以为没启动成功（系统通知关闭时托盘气泡弹不出来）
-    if not config.api_key() or not config.get('hotkey'):
-        QTimer.singleShot(300, on_settings)
-    else:
+    # 双击 exe / 手动启动：弹出主界面；开机自启动静默进托盘
+    if not start_minimized:
+        win.show_and_raise()
+
+    # 配置齐全则气泡提示一次用法；exe 挪动后自启动路径已修正时一并告知
+    if config.api_key() and config.get('hotkey'):
         def show_startup_tip():
             tip = '已启动：按%s开始语音输入，再按一次停止' % hotkey_display(config.get('hotkey'))
             if autostart_healed:

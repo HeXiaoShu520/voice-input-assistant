@@ -16,22 +16,23 @@ from pathlib import Path
 # 注册表启动项键名
 _REG_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
 _VALUE_NAME = 'VoiceInput'
+_TRAY_ARG = '--tray'
 
 
 def _exe_path():
     """返回要写入注册表的启动路径。
-    - 已打包为 exe：直接返回 exe 绝对路径
+    - 已打包为 exe：返回 exe 绝对路径并附带 --tray（静默启动到托盘，不弹主界面）
     - 直接运行脚本：返回 pythonw + main.py 的完整命令，静默启动无黑窗
     """
     if getattr(sys, 'frozen', False):
-        return str(Path(sys.executable).resolve())
+        return '"%s" %s' % (Path(sys.executable).resolve(), _TRAY_ARG)
     python = Path(sys.executable)
     # pythonw.exe 静默启动（无控制台窗口）
     pythonw = python.with_name('pythonw.exe')
     if not pythonw.is_file():
         pythonw = python
     main = Path(__file__).resolve().parent / 'main.py'
-    return '"%s" "%s"' % (pythonw, main)
+    return '"%s" "%s" %s' % (pythonw, main, _TRAY_ARG)
 
 
 def is_enabled():
@@ -73,18 +74,20 @@ def set_enabled(enabled):
 
 
 def _points_to_current():
-    """注册表启动项是否存在且指向当前 exe/脚本路径。"""
+    """注册表启动项是否存在且指向当前 exe/脚本路径（忽略 --tray 参数与引号）。"""
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REG_KEY, 0, winreg.KEY_READ)
         val, _ = winreg.QueryValueEx(key, _VALUE_NAME)
         winreg.CloseKey(key)
     except Exception:
         return False
-    current = _exe_path()
+    stored = str(val).strip().replace('"%s' % _TRAY_ARG, '').replace(' %s' % _TRAY_ARG, '').strip()
     if getattr(sys, 'frozen', False):
-        # exe 模式存的是纯路径，按路径规则比较（忽略大小写与分隔符差异）
-        return os.path.normcase(os.path.normpath(str(val))) == os.path.normcase(os.path.normpath(current))
-    return str(val).strip() == current.strip()
+        # exe 模式：取引号内的路径按路径规则比较（忽略大小写与分隔符差异）
+        stored_path = stored.split('"')[1] if stored.startswith('"') and '"' in stored[1:] else stored.strip('"')
+        current = str(Path(sys.executable).resolve())
+        return os.path.normcase(os.path.normpath(stored_path)) == os.path.normcase(os.path.normpath(current))
+    return str(val).strip() == _exe_path().strip()
 
 
 def heal():
