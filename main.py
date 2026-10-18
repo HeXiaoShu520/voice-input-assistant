@@ -276,11 +276,12 @@ class MainWindow(QWidget):
         key_title.setObjectName('sectionTitle')
         key_layout.addWidget(key_title)
 
-        key_hint = QLabel('语音识别使用火山引擎流式 ASR：首次使用请先开通语音服务，再获取 API Key 填入下方。')
+        key_hint = QLabel('语音识别使用火山引擎流式 ASR：新用户有免费额度，点下方链接即可直接申请开通，'
+                          '再把获取的 API Key 填入下方。')
         key_hint.setWordWrap(True)
         key_layout.addWidget(key_hint)
 
-        link_activate = QPushButton('① 开通语音服务（购买/激活）↗')
+        link_activate = QPushButton('① 开通语音服务（新人有免费额度，点击直接申请）↗')
         link_activate.setStyleSheet('QPushButton { color: #5b6ef5; border: none; text-align: left; padding: 0; }')
         link_activate.setCursor(Qt.PointingHandCursor)
         link_activate.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(VOLC_ACTIVATE_URL)))
