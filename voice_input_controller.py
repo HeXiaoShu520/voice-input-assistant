@@ -214,6 +214,7 @@ class VoiceInputController(QObject):
         # 先保存当前已有的识别文字；停止后服务端可能还会回来最后一批 final，
         # 那部分会在 _on_asr_finished 里追加进来
         self._pending_inject_text = self._accumulated_text or self._last_text
+        log.info('停止录音：暂存文本长度=%d', len(self._pending_inject_text))
         self._accumulated_text = ''
         worker = self._pool.active_worker
         if worker is not None:
@@ -337,14 +338,22 @@ class VoiceInputController(QObject):
         if worker in self._closing_rounds:
             round_state = self._closing_rounds.pop(worker)
             text = round_state['text']
+            log.info('旧轮收尾：可注入文本长度=%d', len(text))
             if text:
                 QTimer.singleShot(80, lambda value=text: self._inject_text(value))
+            elif not self._recording:
+                # 全程没收到任何识别内容，明确告知而不是无声无息
+                self._input_bar.flash_message('未识别到内容，请检查网络或说话音量', duration_ms=2000)
             return
         log.info('识别任务结束 branch=%s recording=%s', branch, self._recording)
         if branch == 'active':
+            died_mid_recording = self._recording
             self._record_timeout_timer.stop()
             self._hide_input_bar()
             self._recording = False
+            if died_mid_recording:
+                # 录音中连接被服务端掐掉：必须让用户知道这轮没结果
+                self.notify.emit('语音服务连接已断开，本轮未识别', True)
             # standby 空闲死亡后不自动重建，避免空闲期循环握手；下次按热键再按需建连。
 
     # ── 文字注入 ──────────────────────────────────────────────────────────
@@ -385,6 +394,7 @@ class VoiceInputController(QObject):
                 QTimer.singleShot(600, lambda: QApplication.clipboard().setText(previous))
         except Exception as e:
             log.warning('输入失败: %s', e)
+            self.notify.emit('文字注入失败：%s' % str(e)[:40], True)
 
     # ── 生命周期 ──────────────────────────────────────────────────────────
 

@@ -37,6 +37,7 @@ class _ToastWindow(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
         self._text = ''
         self._warning = False
         self._font = self.font()
@@ -56,6 +57,7 @@ class _ToastWindow(QWidget):
         self._reposition()
         self.show()
         self.raise_()
+        self.repaint()  # 强制首帧即新内容，避免 DWM 呈现旧缓冲
         self._hide_timer.start(duration_ms)
 
     def _reposition(self):

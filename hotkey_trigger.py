@@ -131,7 +131,9 @@ class HotkeyTrigger(QObject):
                 candidate = normalize_key(key)
                 if tap_mode and candidate in target_names and state['down']:
                     state['down'] = False
-                    if not state['dirty']:
+                    if state['dirty']:
+                        log.info('修饰键轻点被忽略（按住期间检测到其他按键）')
+                    else:
                         self.triggered.emit(0, 0)
 
             self._key_listener = keyboard.Listener(on_press=on_press, on_release=on_release)

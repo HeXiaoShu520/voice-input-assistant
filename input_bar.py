@@ -271,6 +271,8 @@ class InputBar(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        # 禁止系统背景：避免首帧未自绘时闪现不透明方块
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
 
         self.orb = OrbWidget(self)
         self.orb.set_initial_content('typing', '')
@@ -322,6 +324,9 @@ class InputBar(QWidget):
         self._sync_geometry()
         self.show()
         self.raise_()
+        # 半透明窗口重show时 DWM 可能先呈现隐藏前的旧缓冲（宽胶囊残留），
+        # show 后立即强制重绘，保证首帧就是本次内容，消除"先方后圆"闪烁
+        self.repaint()
         self._anim_timer.start(120)
         self._flash_timer.start(duration_ms)
 
@@ -334,6 +339,7 @@ class InputBar(QWidget):
         self._sync_geometry()
         self.show()
         self.raise_()
+        self.repaint()
         self._anim_timer.start(120)
         self._reposition()
 
