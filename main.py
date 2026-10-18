@@ -32,7 +32,9 @@ from history_window import HistoryWindow
 log = get_logger('voice.app')
 
 APP_NAME = '实时语音输入小助手'
-VOLC_API_KEY_URL = 'https://console.volcengine.com/iam/keymanage/'
+# 语音服务购买/开通 与 API 密钥管理 的控制台直链
+VOLC_ACTIVATE_URL = 'https://console.volcengine.com/speech/new/setting/activate?projectName=default'
+VOLC_API_KEY_URL = 'https://console.volcengine.com/speech/new/setting/apikeys?projectName=default'
 
 # 开机自启动以静默方式拉起（只进托盘，不弹主界面）
 _TRAY_ARG = '--tray'
@@ -274,11 +276,17 @@ class MainWindow(QWidget):
         key_title.setObjectName('sectionTitle')
         key_layout.addWidget(key_title)
 
-        key_hint = QLabel('语音识别使用火山引擎流式 ASR，需要填写 API Key。')
+        key_hint = QLabel('语音识别使用火山引擎流式 ASR：首次使用请先开通语音服务，再获取 API Key 填入下方。')
         key_hint.setWordWrap(True)
         key_layout.addWidget(key_hint)
 
-        link_btn = QPushButton('去火山控制台获取 API Key ↗')
+        link_activate = QPushButton('① 开通语音服务（购买/激活）↗')
+        link_activate.setStyleSheet('QPushButton { color: #5b6ef5; border: none; text-align: left; padding: 0; }')
+        link_activate.setCursor(Qt.PointingHandCursor)
+        link_activate.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(VOLC_ACTIVATE_URL)))
+        key_layout.addWidget(link_activate)
+
+        link_btn = QPushButton('② 获取 API Key ↗')
         link_btn.setStyleSheet('QPushButton { color: #5b6ef5; border: none; text-align: left; padding: 0; }')
         link_btn.setCursor(Qt.PointingHandCursor)
         link_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(VOLC_API_KEY_URL)))
