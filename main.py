@@ -96,6 +96,33 @@ def _combo_set_by_data(combo, data):
     combo.setCurrentIndex(idx if idx >= 0 else 0)
 
 
+async def _api_handshake(key):
+    """对火山 ASR 端点做一次 WebSocket 握手；成功静默返回，失败抛异常。"""
+    import asyncio
+    import inspect
+    import uuid
+
+    import websockets
+    from asr_client import ASR_RESOURCE_ID, ASR_URL
+
+    request_id = str(uuid.uuid4())
+    headers = {
+        'X-Api-Key': key,
+        'X-Api-Resource-Id': ASR_RESOURCE_ID,
+        'X-Api-Request-Id': request_id,
+        'X-Api-Connect-Id': request_id,
+        'X-Api-Sequence': '-1',
+    }
+    header_arg = ('additional_headers'
+                  if 'additional_headers' in inspect.signature(websockets.connect).parameters
+                  else 'extra_headers')
+    kw = {header_arg: headers, 'ping_interval': None, 'open_timeout': 8}
+    if 'proxy' in inspect.signature(websockets.connect).parameters:
+        kw['proxy'] = None
+    ws = await asyncio.wait_for(websockets.connect(ASR_URL, **kw), timeout=10)
+    await ws.close()
+
+
 class MainWindow(QWidget):
     """主界面：语音输入开关、触发按键、注入方式与 API Key 设置。
 
@@ -116,6 +143,7 @@ class MainWindow(QWidget):
     def __init__(self, controller, icon):
         super().__init__()
         self._controller = controller
+        self._test_done.connect(self._on_test_done)  # 必须连接：否则测试结果永远到不了界面
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(icon)
         self.setMinimumWidth(480)
@@ -265,27 +293,15 @@ class MainWindow(QWidget):
 
         def do_test():
             try:
-                import asyncio, inspect
+                import asyncio
 
                 import websockets
-                from asr_client import ASR_URL, AsrSession
-
-                async def _ping():
-                    # 待测 key 通过参数进入请求头，不改动全局配置
-                    header_arg = ('additional_headers'
-                                  if 'additional_headers' in inspect.signature(websockets.connect).parameters
-                                  else 'extra_headers')
-                    sess = AsrSession(text_cb=lambda x: None, final_cb=lambda x: None,
-                                      status_cb=lambda x: None, error_cb=lambda x: None)
-                    kw = {header_arg: sess._headers(key), 'ping_interval': None, 'open_timeout': 8}
-                    if 'proxy' in inspect.signature(websockets.connect).parameters:
-                        kw['proxy'] = None
-                    ws = await asyncio.wait_for(websockets.connect(ASR_URL, **kw), timeout=10)
-                    await ws.close()
-
-                asyncio.run(_ping())
+                log.info('测试连接：开始 (websockets=%s)', getattr(websockets, '__version__', '?'))
+                asyncio.run(_api_handshake(key))
+                log.info('测试连接：握手成功')
                 emit_result(True, '连接成功 ✓')
             except Exception as e:
+                log.warning('测试连接失败: %r', e)
                 msg = str(e)
                 if '401' in msg or 'Unauthorized' in msg.lower():
                     msg = 'API Key 无效（401 未授权）'
@@ -343,6 +359,29 @@ def main():
     setup_logging()
     log.info('启动 %s', APP_NAME)
     config.load()
+
+    # 诊断模式：只跑一次连接测试就退出，用于排查打包环境的网络问题
+    if '--selftest' in sys.argv[1:]:
+        import asyncio
+
+        try:
+            import ssl
+            log.info('自检：ssl=%s', ssl.OPENSSL_VERSION)
+        except Exception as e:
+            log.warning('自检：ssl 导入失败 %r', e)
+        try:
+            import websockets
+            log.info('自检：websockets=%s', getattr(websockets, '__version__', '?'))
+        except Exception as e:
+            log.warning('自检：websockets 导入失败 %r', e)
+        log.info('自检：开始连接测试')
+        try:
+            asyncio.run(_api_handshake(config.api_key()))
+            log.info('自检：连接成功 ✓')
+        except Exception as e:
+            log.warning('自检：连接失败 %r', e)
+        return 0
+
     # exe 被挪动后注册表自启动路径会过期，启动时顺手修正
     autostart_healed = autostart.heal()
     # 开机自启动（--tray）静默拉起：只进托盘，不弹主界面
@@ -364,6 +403,20 @@ def main():
 
     # ── 主界面 ────────────────────────────────────────────────
     win = MainWindow(controller, icon)
+
+    # 界面自检：自动触发一次「测试连接」，验证结果信号能否回到 UI
+    if '--uitest' in sys.argv[1:]:
+        def run_uitest():
+            def on_result(ok, text):
+                log.info('UITEST 收到结果 ok=%s text=%r', ok, text)
+                log.info('UITEST 标签=%r 按钮可用=%s',
+                         win._test_result.text(), win._test_btn.isEnabled())
+                QTimer.singleShot(500, app.quit)
+            win._test_done.connect(on_result)
+            log.info('UITEST 触发测试连接')
+            win._test_connection()
+        QTimer.singleShot(3000, run_uitest)
+        QTimer.singleShot(30000, app.quit)  # 保底退出
 
     # ── 托盘 ──────────────────────────────────────────────────
     tray = QSystemTrayIcon(icon)

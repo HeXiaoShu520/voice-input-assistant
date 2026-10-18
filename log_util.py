@@ -31,6 +31,13 @@ def setup_logging(level=logging.INFO):
     global _CONFIGURED
     if _CONFIGURED:
         return
+    # 控制台输出统一 UTF-8：GBK 编不了 ✓ 等字符会导致 logging 报错
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, 'reconfigure'):
+            try:
+                stream.reconfigure(encoding='utf-8')
+            except Exception:
+                pass
     formatter = logging.Formatter(_FORMAT, _DATEFMT)
 
     console = logging.StreamHandler(sys.stdout)
