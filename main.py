@@ -25,6 +25,7 @@ import config
 from hotkey_trigger import hotkey_display
 from log_util import get_logger, setup_logging
 from toast import show_toast
+from ui_theme import APP_QSS
 from voice_input_controller import VoiceInputController
 from history_window import HistoryWindow
 
@@ -144,22 +145,52 @@ class MainWindow(QWidget):
         super().__init__()
         self._controller = controller
         self._test_done.connect(self._on_test_done)  # 必须连接：否则测试结果永远到不了界面
+        self._force_quit = False  # 真正退出时置 True，让 closeEvent 放行
+        self.setObjectName('MainWindow')
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(icon)
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(500)
 
         root = QVBoxLayout(self)
-        root.setSpacing(10)
+        root.setContentsMargins(24, 20, 24, 18)
+        root.setSpacing(12)
 
-        # 顶部状态：一句话说明当前怎么用
+        # ── 标题区 ────────────────────────────────────────────────
+        header = QHBoxLayout()
+        icon_label = QLabel()
+        if icon is not None and not icon.isNull():
+            icon_label.setPixmap(icon.pixmap(44, 44))
+        header.addWidget(icon_label)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(1)
+        app_title = QLabel(APP_NAME)
+        app_title.setObjectName('appTitle')
+        title_col.addWidget(app_title)
+        app_subtitle = QLabel('按热键说话，实时出字，自动打进光标处')
+        app_subtitle.setObjectName('appSubtitle')
+        title_col.addWidget(app_subtitle)
+        header.addLayout(title_col)
+        header.addStretch(1)
+        root.addLayout(header)
+
+        # ── 状态胶囊 ──────────────────────────────────────────────
         self._status_label = QLabel('')
-        self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet('color: #5b6ef5; font-weight: bold;')
+        self._status_label.setObjectName('statusPill')
+        self._status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         root.addWidget(self._status_label)
 
-        # ── 基础设置 ──────────────────────────────────────────────
+        # ── 基础设置卡片 ──────────────────────────────────────────
+        basic_card = QFrame()
+        basic_card.setObjectName('card')
+        basic = QVBoxLayout(basic_card)
+        basic.setContentsMargins(16, 12, 16, 14)
+        basic.setSpacing(10)
+        basic_title = QLabel('基础设置')
+        basic_title.setObjectName('sectionTitle')
+        basic.addWidget(basic_title)
+
         form = QFormLayout()
-        form.setSpacing(8)
+        form.setSpacing(10)
 
         self._enabled_check = QCheckBox('启用语音输入（关闭后热键无效）')
         self._enabled_check.setChecked(bool(config.get('enabled')))
@@ -182,23 +213,28 @@ class MainWindow(QWidget):
             self._inject_combo.addItem(label, value)
         _combo_set_by_data(self._inject_combo, config.get('inject_mode') or 'paste')
         form.addRow('注入方式：', self._inject_combo)
-        root.addLayout(form)
+        basic.addLayout(form)
+        root.addWidget(basic_card)
 
-        # ── API Key ───────────────────────────────────────────────
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        root.addWidget(line)
+        # ── API Key 卡片 ──────────────────────────────────────────
+        key_card = QFrame()
+        key_card.setObjectName('card')
+        key_layout = QVBoxLayout(key_card)
+        key_layout.setContentsMargins(16, 12, 16, 14)
+        key_layout.setSpacing(10)
+        key_title = QLabel('火山引擎 API Key')
+        key_title.setObjectName('sectionTitle')
+        key_layout.addWidget(key_title)
 
         key_hint = QLabel('语音识别使用火山引擎流式 ASR，需要填写 API Key。')
         key_hint.setWordWrap(True)
-        root.addWidget(key_hint)
+        key_layout.addWidget(key_hint)
 
         link_btn = QPushButton('去火山控制台获取 API Key ↗')
         link_btn.setStyleSheet('QPushButton { color: #5b6ef5; border: none; text-align: left; padding: 0; }')
         link_btn.setCursor(Qt.PointingHandCursor)
         link_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(VOLC_API_KEY_URL)))
-        root.addWidget(link_btn)
+        key_layout.addWidget(link_btn)
 
         key_row = QHBoxLayout()
         self._key_edit = QLineEdit()
@@ -207,17 +243,19 @@ class MainWindow(QWidget):
         self._key_edit.setText(config.api_key())
         key_row.addWidget(self._key_edit)
         self._test_btn = QPushButton('测试连接')
-        self._test_btn.setFixedWidth(80)
+        self._test_btn.setFixedWidth(88)
         self._test_btn.clicked.connect(self._test_connection)
         key_row.addWidget(self._test_btn)
 
         key_form = QFormLayout()
         key_form.setSpacing(8)
         key_form.addRow('API Key：', key_row)
+        key_layout.addLayout(key_form)
+
         self._test_result = QLabel('')
         self._test_result.setWordWrap(True)
-        key_form.addRow('', self._test_result)
-        root.addLayout(key_form)
+        key_layout.addWidget(self._test_result)
+        root.addWidget(key_card)
 
         # ── 底部按钮 ──────────────────────────────────────────────
         btns = QHBoxLayout()
@@ -225,28 +263,43 @@ class MainWindow(QWidget):
         history_btn.clicked.connect(self.history_requested.emit)
         btns.addWidget(history_btn)
         btns.addStretch(1)
-        save_btn = QPushButton('保存设置')
-        save_btn.setDefault(True)
-        save_btn.clicked.connect(self._save)
-        btns.addWidget(save_btn)
         quit_btn = QPushButton('退出程序')
+        quit_btn.setObjectName('danger')
         quit_btn.clicked.connect(self.quit_requested.emit)
         btns.addWidget(quit_btn)
+        save_btn = QPushButton('保存设置')
+        save_btn.setObjectName('primary')
+        save_btn.setDefault(True)
+        save_btn.setFixedWidth(110)
+        save_btn.clicked.connect(self._save)
+        btns.addWidget(save_btn)
         root.addLayout(btns)
 
         self._update_status()
 
     # ── 状态与联动 ────────────────────────────────────────────────
+    # 状态胶囊的配色：前景/底色/圆点（随状态切换）
+    _STATUS_STYLES = {
+        'ok': ('#1e8e4e', '#eafaf1'),
+        'warn': ('#b9770e', '#fef5e7'),
+        'off': ('#6b7280', '#eef0f4'),
+    }
+
     def _update_status(self):
-        """顶部一句话：结合开关/密钥/热键告诉用户现在怎么用。"""
+        """顶部状态胶囊：结合开关/密钥/热键告诉用户现在怎么用。"""
         if not config.get('enabled'):
+            state = 'off'
             txt = '语音输入当前已停用，勾选上方开关即可恢复'
         elif not config.api_key():
+            state = 'warn'
             txt = '还差一步：在下方填写 API Key 并点「保存设置」'
         else:
-            txt = ('随时按%s开始录音，边说边出字；再按一次停止，'
-                   '文字自动打进当前输入框' % hotkey_display(config.get('hotkey') or _HOTKEY_OPTIONS[0][1]))
-        self._status_label.setText(txt)
+            state = 'ok'
+            txt = ('按%s说话，实时出字；再按一次停止并输入'
+                   % hotkey_display(config.get('hotkey') or _HOTKEY_OPTIONS[0][1]))
+        fg, bg = self._STATUS_STYLES[state]
+        self._status_label.setStyleSheet('QLabel#statusPill { color: %s; background-color: %s; }' % (fg, bg))
+        self._status_label.setText('●  ' + txt)
 
     def sync_enabled_check(self, checked):
         """托盘菜单等外部改动后回写勾选框（不触发 toggled 信号）。"""
@@ -268,7 +321,10 @@ class MainWindow(QWidget):
         self.activateWindow()
 
     def closeEvent(self, event):
-        """点 X 只是最小化到托盘，语音输入继续在后台可用。"""
+        """点 X 只是最小化到托盘；真正退出流程（_force_quit）才放行关闭。"""
+        if self._force_quit:
+            event.accept()
+            return
         event.ignore()
         self.hide()
         show_toast('已最小化到托盘，语音输入继续可用', duration_ms=1500)
@@ -389,12 +445,14 @@ def main():
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    app.setStyleSheet(APP_QSS)
 
     # ── 单实例锁 ──────────────────────────────────────────────
     if not _acquire_single_instance():
         log.warning('已有实例在运行，本次启动退出')
         show_toast('小助手已在运行，无需重复启动', duration_ms=1800)
-        QTimer.singleShot(2000, app.quit)
+        # 注意用 exit(0)：Qt 6.9+ 的 quit() 会被拒绝关闭的窗口（最小化到托盘）否决
+        QTimer.singleShot(2000, lambda: app.exit(0))
         return app.exec()
 
     icon = _make_icon()
@@ -498,9 +556,11 @@ def main():
         log.info('托盘退出')
         controller.shutdown()
         tray.hide()
+        win._force_quit = True  # 让主窗口 closeEvent 放行，quit 不被"最小化到托盘"否决
         win.hide()
         show_toast('已退出', duration_ms=1200)
-        QTimer.singleShot(1300, app.quit)
+        # 注意用 exit(0)：Qt 6.9+ 的 quit() 会被拒绝关闭的窗口否决，导致进程不退出
+        QTimer.singleShot(1300, lambda: app.exit(0))
 
     quit_action.triggered.connect(on_quit)
     win.quit_requested.connect(on_quit)
