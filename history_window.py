@@ -4,7 +4,7 @@
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QApplication, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QVBoxLayout, QWidget,
 )
 
@@ -82,25 +82,12 @@ class HistoryWindow(QWidget):
             return
         for entry in entries:
             text = entry.get('text', '')
-            time_str = entry.get('time', '')
-            # 列表项：主文字 + 右对齐时间
             display = text[:60] + ('…' if len(text) > 60 else '')
             item = QListWidgetItem()
             item.setText(display)
             item.setToolTip(text)
             item.setData(Qt.UserRole, text)          # 完整文字用于复制
-            item.setData(Qt.UserRole + 1, time_str)
             self._list.addItem(item)
-            # 时间标签用 setItemWidget 叠加在右侧
-            row_widget = QWidget()
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 0, 4, 0)
-            row_layout.addStretch()
-            time_label = QLabel(time_str)
-            time_label.setStyleSheet('color: #aaa; font-size: 11px;')
-            time_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            row_layout.addWidget(time_label)
-            self._list.setItemWidget(item, row_widget)
 
     def _on_item_clicked(self, item):
         """复制完整文字到剪贴板，并短暂显示提示。"""
