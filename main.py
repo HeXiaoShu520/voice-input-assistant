@@ -553,33 +553,37 @@ def main():
     show_watcher.timeout.connect(lambda: _poll_show_event(show_event, _on_show_requested))
     show_watcher.start()
 
-    # 界面自检：自动触发一次「测试连接」，验证结果信号能否回到 UI
+    # 界面自检：固定间隔状态机，逐步验证 测试连接 → 历史页 → 托盘双击
     if '--uitest' in sys.argv[1:]:
-        def run_history_check():
-            for btn in win.findChildren(QPushButton):
-                if btn.text() == '识别历史':
-                    log.info('UITEST 切换到识别历史页')
-                    btn.click()
-                    break
+        uitest_step = {'n': 0}
 
-            def check():
-                log.info('UITEST 历史页可见=%s 当前页=%s',
-                         history_window.isVisible(), win._stack.currentIndex())
-                QTimer.singleShot(300, lambda: app.exit(0))
-
-            QTimer.singleShot(1000, check)
-
-        def run_uitest():
-            def on_result(ok, text):
-                log.info('UITEST 收到结果 ok=%s text=%r', ok, text)
-                log.info('UITEST 标签=%r 按钮可用=%s',
+        def uitest_tick():
+            n = uitest_step['n']
+            uitest_step['n'] = n + 1
+            if n == 0:
+                log.info('UITEST[0] 触发测试连接')
+                win._test_connection()
+            elif n == 2:
+                log.info('UITEST[2] 结果=%r 按钮可用=%s',
                          win._test_result.text(), win._test_btn.isEnabled())
-                QTimer.singleShot(800, run_history_check)
-            win._test_done.connect(on_result)
-            log.info('UITEST 触发测试连接')
-            win._test_connection()
-        QTimer.singleShot(3000, run_uitest)
-        QTimer.singleShot(30000, lambda: app.exit(0))  # 保底退出
+                log.info('UITEST[2] 切换到识别历史页')
+                win._switch_page(1)
+            elif n == 4:
+                log.info('UITEST[4] 历史页可见=%s 当前页=%s',
+                         history_window.isVisible(), win._stack.currentIndex())
+                log.info('UITEST[4] 模拟托盘双击')
+                tray.activated.emit(QSystemTrayIcon.DoubleClick)
+            elif n == 6:
+                log.info('UITEST[6] 托盘双击后 主界面可见=%s 当前页=%s',
+                         win.isVisible(), win._stack.currentIndex())
+                log.info('UITEST 完成')
+                app.exit(0)
+
+        tick = QTimer(app)
+        tick.setInterval(700)
+        tick.timeout.connect(uitest_tick)
+        tick.start()
+        QTimer.singleShot(25000, lambda: app.exit(1))  # 保底退出
 
     # ── 托盘 ──────────────────────────────────────────────────
     tray = QSystemTrayIcon(icon)
@@ -637,8 +641,9 @@ def main():
 
     # 单击/双击托盘图标：打开主界面（设置页）；历史页在主界面里切换
     def on_tray_activated(reason):
-        # Windows 上 reason 是 int，DoubleClick=2，Trigger(单击)=3
-        if int(reason) in (2, 3):
+        # PySide6 6.11 的 reason 是 ActivationReason 枚举，不能 int()，
+        # 否则槽函数抛 TypeError，托盘点击就"没有任何反应"
+        if reason in (QSystemTrayIcon.DoubleClick, QSystemTrayIcon.Trigger):
             win.show_and_raise(0)
 
     tray.activated.connect(on_tray_activated)
