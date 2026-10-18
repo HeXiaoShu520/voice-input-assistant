@@ -39,6 +39,8 @@ _TRAY_ARG = '--tray'
 
 # 单实例互斥体名；Local\ 前缀 = 当前登录会话内唯一
 _SINGLE_INSTANCE_MUTEX = 'Local\\VoiceInputAssistant'
+# 二次启动时用来唤出已运行实例主界面的命名事件
+_SHOW_EVENT_NAME = 'Local\\VoiceInputAssistantShow'
 _ERROR_ALREADY_EXISTS = 183
 
 _k32 = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -51,6 +53,29 @@ def _acquire_single_instance():
     """
     _k32.CreateMutexW(None, False, _SINGLE_INSTANCE_MUTEX)
     return ctypes.get_last_error() != _ERROR_ALREADY_EXISTS
+
+
+def _create_show_event():
+    """创建（或打开）唤出主界面的命名事件，返回句柄。"""
+    return _k32.CreateEventW(None, True, False, _SHOW_EVENT_NAME)
+
+
+def _signal_show_event():
+    """通知已运行的实例显示主界面；成功返回 True。"""
+    EVENT_MODIFY_STATE = 0x0002
+    handle = _k32.OpenEventW(EVENT_MODIFY_STATE, False, _SHOW_EVENT_NAME)
+    if not handle:
+        return False
+    _k32.SetEvent(handle)
+    _k32.CloseHandle(handle)
+    return True
+
+
+def _poll_show_event(handle, callback):
+    """事件被触发（有新的二次启动）时调用 callback 并复位事件。"""
+    if _k32.WaitForSingleObject(handle, 0) == 0:  # WAIT_OBJECT_0
+        _k32.ResetEvent(handle)
+        callback()
 
 
 # 可选热键列表：(显示名称, config 值)
@@ -357,6 +382,12 @@ class MainWindow(QWidget):
         self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
         self.raise_()
         self.activateWindow()
+        try:
+            # Windows 可能拒绝后台进程抢前台，直接对原生窗口句柄强制置前
+            import ctypes
+            ctypes.windll.user32.SetForegroundWindow(int(self.winId()))
+        except Exception:
+            pass
 
     def closeEvent(self, event):
         """点 X 只是最小化到托盘；真正退出流程（_force_quit）才放行关闭。"""
@@ -492,11 +523,15 @@ def main():
 
     # ── 单实例锁 ──────────────────────────────────────────────
     if not _acquire_single_instance():
-        log.warning('已有实例在运行，本次启动退出')
-        show_toast('小助手已在运行，无需重复启动', duration_ms=1800)
-        # 注意用 exit(0)：Qt 6.9+ 的 quit() 会被拒绝关闭的窗口（最小化到托盘）否决
-        QTimer.singleShot(2000, lambda: app.exit(0))
+        # 已有实例在运行：唤出它的主界面，然后本进程退出
+        activated = _signal_show_event()
+        log.warning('已有实例在运行，本次启动退出（唤出主界面%s）', '成功' if activated else '失败')
+        show_toast('小助手已在运行，已为你唤出主界面' if activated else '小助手已在运行，无需重复启动',
+                   duration_ms=1800)
+        QTimer.singleShot(1800, lambda: app.exit(0))
         return app.exec()
+
+    show_event = _create_show_event()
 
     icon = _make_icon()
     app.setWindowIcon(icon)
@@ -507,6 +542,16 @@ def main():
 
     # ── 主界面 ────────────────────────────────────────────────
     win = MainWindow(controller, icon, history_window)
+
+    # 监听二次启动的唤出请求：双击 exe 时把已运行实例的主界面弹到最前
+    def _on_show_requested():
+        log.info('收到二次启动的唤出请求，显示主界面')
+        win.show_and_raise(_default_page())
+
+    show_watcher = QTimer(app)
+    show_watcher.setInterval(300)
+    show_watcher.timeout.connect(lambda: _poll_show_event(show_event, _on_show_requested))
+    show_watcher.start()
 
     # 界面自检：自动触发一次「测试连接」，验证结果信号能否回到 UI
     if '--uitest' in sys.argv[1:]:
