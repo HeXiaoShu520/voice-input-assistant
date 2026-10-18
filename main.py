@@ -436,6 +436,11 @@ class MainWindow(QWidget):
         show_toast('设置已保存')
 
 
+def _default_page():
+    """启动时主界面默认页：配置齐全 → 识别历史（日常查看）；未配置 → 设置页（引导配置）。"""
+    return 1 if (config.api_key() and config.get('hotkey')) else 0
+
+
 def _confirm_exit():
     """弹退出确认框；返回 True 表示用户确认退出。"""
     box = QMessageBox()
@@ -617,9 +622,10 @@ def main():
     tray.setContextMenu(menu)
     tray.show()
 
-    # 双击 exe / 手动启动：弹出主界面；开机自启动静默进托盘
+    # 双击 exe / 手动启动：弹出主界面（配置过默认看识别历史，没配置默认进设置）；
+    # 开机自启动静默进托盘
     if not start_minimized:
-        win.show_and_raise()
+        win.show_and_raise(_default_page())
 
     # 配置齐全则气泡提示一次用法；exe 挪动后自启动路径已修正时一并告知
     if config.api_key() and config.get('hotkey'):
